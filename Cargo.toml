@@ -1,0 +1,8 @@
+[package]
+authors = ["Till Höppner <till@hoeppner.ws>"]
+name = "cpuline"
+version = "0.1.0"
+
+[dependencies]
+clap = "2.13.0"
+num = "0.1.36"
