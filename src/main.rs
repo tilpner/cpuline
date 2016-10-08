@@ -1,127 +1,143 @@
 #[macro_use]
 extern crate clap;
-extern crate num;
+extern crate vec_map;
+extern crate libc;
 
-use std::path::{Path, PathBuf};
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+
 use std::fs::File;
-use std::io::{self, Read};
-use std::{iter, thread, ops};
-use std::time::Duration;
+use std::io::{self, BufRead, BufReader};
+use std::thread;
+use std::time::{Instant, Duration};
 
-use clap::{Arg, App, AppSettings, SubCommand};
+use clap::{Arg, App};
 
-use num::NumCast;
+use vec_map::VecMap;
 
-const SYS_PRESENT: &'static str = "/sys/devices/system/cpu/present";
-static FORMAT: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const PROC_STAT: &'static str = "/proc/stat";
+static FORMAT: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
-const WINDOW_SIZE: usize = 32;
-
-#[derive(Debug, Default)]
-struct Window<T> {
-    data: Vec<T>,
-    idx: usize,
-    size: usize
-}
-
-impl<T> Window<T> where T: for<'a> iter::Sum<&'a T> + ops::Div<Output=T> + NumCast {
-    fn new(size: usize) -> Window<T> {
-        Window { data: Vec::with_capacity(size), idx: 0, size: size }
-    }
-
-    fn sample(&mut self, value: T) {
-        if self.data.len() < self.size { self.data.push(value) }
-        else { self.data[self.idx] = value; }
-        self.idx = (self.idx + 1) % self.size;
-    }
-
-    fn elements(&self) -> (&[T], &[T]) { (&self.data[self.idx..], &self.data[..self.idx]) }
-    fn average(&self) -> T { self.data.iter().sum::<T>() / T::from(self.data.len()).unwrap() }
-}
-
-#[derive(Debug, Default)]
-struct Core {
-    index: u32,
-    min_freq: u32,
-    max_freq: u32,
-    cur_freq: Window<u32>
-}
-
+/// cpu  3357 0 4313 1362393
+///   The  amount  of  time, measured in units of USER_HZ (1/100ths of a
+///   second on most architectures, use sysconf(_SC_CLK_TCK)  to  obtain
+///   the right value), that the system spent in various states:
+///
+///   user   (1) Time spent in user mode.
+///
+///   nice   (2) Time spent in user mode with low priority (nice).
+///
+///   system (3) Time spent in system mode.
+///
+///   idle   (4) Time  spent  in  the  idle task.  This value should be
+///              USER_HZ times the second entry in the /proc/uptime  pseudo-
+///              file.
+///
+///   iowait (since Linux 2.5.41)
+///          (5) Time waiting for I/O to complete.
+///
+///   irq (since Linux 2.6.0-test4)
+///          (6) Time servicing interrupts.
+///
+///   softirq (since Linux 2.6.0-test4)
+///          (7) Time servicing softirqs.
+///
+///   steal (since Linux 2.6.11)
+///          (8) Stolen time, which is the time spent in other operating
+///              systems when running in a virtualized environment
+///
+///   guest (since Linux 2.6.24)
+///          (9) Time spent running a virtual CPU  for  guest  operating
+///              systems under the control of the Linux kernel.
+///
+///   guest_nice (since Linux 2.6.33)
+///        (10)  Time  spent  running  a  niced guest (virtual CPU for
+///              guest operating systems under the control of the Linux ker‐
+///              nel).
 #[derive(Debug)]
-struct System {
-    cores: Vec<Core>,
-    load: Window<f32>
+struct Stat {
+    time: Instant,
+    total: Option<CPU>,
+    cores: VecMap<CPU>
 }
 
-impl System {
-    fn new() -> System {
-        System {
-            cores: init_cores(),
-            load: Window::new(8)
+impl Stat {
+    pub fn read() -> io::Result<Stat> {
+        let file = try!(File::open(PROC_STAT));
+        let reader = BufReader::new(file);
+        let mut stat = Stat { time: Instant::now(), total: None, cores: VecMap::new() };
+
+        for line in reader.lines() {
+            let line = try!(line);
+            const OFFSET: usize = 3; // "cpu".len()
+            if line.starts_with("cpu ") {
+                stat.total = Some(CPU::from_line(&line[OFFSET..])); 
+            } else if line.starts_with("cpu") {
+                let num: u64 = line[OFFSET..].split_whitespace().next().and_then(|s| s.trim().parse().ok()).unwrap();
+                stat.cores.insert(num as usize, CPU::from_line(&line[OFFSET..]));
+            }
+        }
+
+        Ok(stat)
+    }
+
+    pub fn load_since(&self, earlier: &Stat) -> Load {
+        Load {
+            duration: self.time.duration_since(earlier.time),
+            total: match (&self.total, &earlier.total) {
+                (&Some(ref now), &Some(ref old)) => Some(now.diff(old)),
+                _ => None
+            },
+            cores: self.cores.iter()
+                .flat_map(|(idx, core)| earlier.cores.get(idx).map(|ec| (idx, core.diff(ec))))
+                .collect()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Load {
+    duration: Duration,
+    total: Option<CPU>,
+    cores: VecMap<CPU>
+}
+
+#[derive(Debug, Clone)]
+struct CPU {
+    user: u64,
+    nice: u64,
+    system: u64,
+    idle: u64
+}
+
+impl CPU {
+    pub fn from_line(line: &str) -> CPU {
+        fn parse(s: Option<&str>) -> u64 { s.and_then(|s| s.trim().parse().ok()).expect("Couldn't parse CPU stat") }
+        let mut tok = line.split_whitespace();
+        CPU {
+            user: parse(tok.next()),
+            nice: parse(tok.next()),
+            system: parse(tok.next()),
+            idle: parse(tok.next())
         }
     }
 
-    // Direct printing to avoid allocation
-    fn print_cores(&self) {
-        for c in &self.cores {
-            let load = (c.cur_freq.average() - c.min_freq) as f32 / (c.max_freq - c.min_freq) as f32;
-            print!("{}", FORMAT[(FORMAT.len() as f32 * load) as usize]);
+    pub fn diff(&self, other: &CPU) -> CPU {
+        CPU {
+            user: self.user - other.user,
+            nice: self.nice - other.nice,
+            system: self.system - other.system,
+            idle: self.idle - other.idle
         }
-        println!("");
     }
-
-    fn print_system(&self) {
-        let (first, last) = self.load.elements();
-        for load in first.iter().chain(last.iter()) {
-            print!("{}", FORMAT[(FORMAT.len() as f32 * load) as usize]);
-        }
-        println!("");
-    }
-}
-
-fn read_into_string<P: AsRef<Path>>(path: P) -> io::Result<String> {
-    let mut output = String::new();
-    try!(try!(File::open(path)).read_to_string(&mut output));
-    Ok(output)
-}
-
-fn init_cores() -> Vec<Core> {
-    let present = read_into_string(SYS_PRESENT).expect("Can't read kernel interface to query present cores");
-    
-    // a-b
-    let mut parts = present.split('-').flat_map(|s| s.trim().parse::<u32>().ok());
-    let (a, b) = (parts.next().unwrap(), parts.next().unwrap());
-    (a..b + 1).map(|idx| {
-        let cpu_path: PathBuf = format!("/sys/devices/system/cpu/cpu{}/cpufreq", idx).into();
-        Core {
-            index: idx,
-            min_freq: read_into_string(cpu_path.join("scaling_min_freq")).ok()
-                .and_then(|s| s.trim().parse().ok()).expect("Can't read min freq"),
-            max_freq: read_into_string(cpu_path.join("scaling_max_freq")).ok()
-                .and_then(|s| s.trim().parse().ok()).expect("Can't read max frequency"),
-            cur_freq: Window::new(WINDOW_SIZE)
-        }
-    }).collect()
-}
-
-fn update(system: &mut System) {
-    let mut frame_average = 0.;
-    for c in &mut system.cores {
-        let cpu_path: PathBuf = format!("/sys/devices/system/cpu/cpu{}/cpufreq/scaling_cur_freq", c.index).into();
-        let cur_freq = read_into_string(cpu_path).ok()
-                .and_then(|s| s.trim().parse().ok()).expect("Can't read current frequency");
-        c.cur_freq.sample(cur_freq);
-        frame_average += (cur_freq - c.min_freq) as f32 / (c.max_freq - c.min_freq) as f32;
-    }
-    system.load.sample(frame_average / system.cores.len() as f32);
 }
 
 fn main() {
+    env_logger::init().unwrap();
     let matches = App::new("cpuline")
         .version(crate_version!())
         .author(crate_authors!())
-        .about("Display CPU usage per-core or over time (Linux-only)")
-        .setting(AppSettings::SubcommandRequired)
         .arg(Arg::with_name("interval")
              .global(true)
              .short("i")
@@ -129,23 +145,40 @@ fn main() {
              .value_name("MS")
              .takes_value(true)
              .default_value("1000"))
-        .subcommand(SubCommand::with_name("cores"))
-        .subcommand(SubCommand::with_name("time"))
         .get_matches();
-
-    let action = match matches.subcommand_name() {
-        Some("cores") => System::print_cores,
-        Some("time") => System::print_system,
-        _ => unreachable!()
-    };
 
     let interval = value_t!(matches, "interval", u64).unwrap();
 
-    let mut system = System::new();
+    let mut stat = None;
 
+    let user_hz: u64 = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as u64 };
+    debug!("user_hz({})", user_hz);
+    
     loop {
-        update(&mut system);
-        action(&system);
+        let old = stat;
+        stat = Stat::read().ok();
+
+        match (&stat, &old) {
+            (&Some(ref now), &Some(ref old)) => {
+                let load = now.load_since(&old);
+                let duration_ticks = load.duration.as_secs() * user_hz 
+                    + (load.duration.subsec_nanos() as f64 / 1E9 * user_hz as f64) as u64;
+
+                for (_, core) in load.cores.iter() {
+                    // How many ticks the core was in use
+                    let used = core.user + core.nice + core.system;
+                    // How long this core was used with 0 (not used) to 1 (fully used)
+                    let used_part = used as f32 / duration_ticks as f32;
+
+                    let output = FORMAT[((FORMAT.len() - 1) as f32 * used_part) as usize];
+                    debug!("used_part({}) = used({}) / duration_ticks({}) => '{}'", used_part, used, duration_ticks, output);
+                    print!("{}", output);
+                }
+                println!("");
+            },
+            _ => ()
+        }
+
         thread::sleep(Duration::from_millis(interval));
     }
 }
