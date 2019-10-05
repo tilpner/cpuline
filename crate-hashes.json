@@ -1,0 +1,14 @@
+{
+  "ansi_term 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)": "08fk0p2xvkqpmz3zlrwnf6l8sj2vngw464rvzspzp31sbgxbwm4v",
+  "atty 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)": "0a1ii8h9fvvrq05bz7j135zjjz1sjz6n2invn2ngxqri0jxgmip2",
+  "bitflags 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)": "0cybfqfkplbznkvm0cjn6wv7vpp718i47ld4g84qrb0lwa0jpmcg",
+  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)": "054n9ngh6pkknpmd4acgdsp40iw6f5jzq8a4h2b76gnbvk6p5xjh",
+  "libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)": "1vsb4pyn6gl6sri6cv5hin5wjfgk7lk2bshzmxb1xnkckjhz4gbx",
+  "strsim 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)": "0d3jsdz22wgjyxdakqnvdgmwjdvkximz50d9zfk4qlalw635qcvy",
+  "textwrap 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)": "0s25qh49n7kjayrdj4q3v0jk0jc6vy88rdw0bvgfxqlscpqpxi7d",
+  "unicode-width 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)": "1mss965j7d8pv7z7zg6qfkcb7lyhxkxvbh8akzr4xxxx3vzazwsi",
+  "vec_map 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)": "1jj2nrg8h3l53d43rwkpkikq5a5x15ms4rf1rw92hp5lrqhi8mpi",
+  "winapi 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)": "084ialbgww1vxry341fmkg5crgpvab3w52ahx1wa54yqjgym0vxs",
+  "winapi-i686-pc-windows-gnu 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)": "05ihkij18r4gamjpxj4gra24514can762imjzlmak5wlzidplzrp",
+  "winapi-x86_64-pc-windows-gnu 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)": "0n1ylmlsb8yg1v583i4xy0qmqg42275flvbc51hdqjjfjcl9vlbj"
+}
